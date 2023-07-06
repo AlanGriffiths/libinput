@@ -1,0 +1,151 @@
+name: libinput
+version: "22.04"
+base: core22
+summary: libinput-tools helpful in debugging libinput
+description: |
+  - list-devices:
+  List all devices with their default configuration options
+
+  - debug-events:
+  Print events to stdout
+
+  - debug-gui:
+  Display a simple GUI to visualize libinput's events.
+
+  - measure <feature>:
+  Measure various device properties. See the man page for more info
+
+  - analyze <feature>:
+  Analyze device events. See the man page for more info
+
+  - record:
+  Record event stream from a device node. See the man page for more info
+
+  - replay:
+  Replay a previously recorded event stream. See the man page for more info
+
+website: https://github.com/AlanGriffiths/libinput
+contact: https://github.com/AlanGriffiths/libinput/issues
+license: Apache-2.0
+
+grade: stable
+confinement: strict
+
+layout:
+  /usr/share/drirc.d:
+    bind: $SNAP/graphics/drirc.d
+  /usr/share/X11/xkb:
+    bind: $SNAP/usr/share/X11/xkb
+  /usr/lib/$SNAPCRAFT_ARCH_TRIPLET/gdk-pixbuf-2.0:
+    bind: $SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/gdk-pixbuf-2.0
+  /usr/share/mime:
+    bind: $SNAP/usr/share/mime
+  /etc/gtk-3.0:
+    bind: $SNAP/etc/gtk-3.0
+  /usr/libexec/libinput:
+    symlink: $SNAP/usr/libexec/libinput
+  /usr/share/libinput:
+    symlink: $SNAP/usr/share/libinput
+
+plugs:
+  graphics-core22:
+    interface: content
+    target: $SNAP/graphics
+    default-provider: mesa-core22
+
+apps:
+  list-devices:
+    plugs:
+      - hardware-observe
+      - raw-input
+    command: usr/bin/libinput list-devices
+
+  debug-events:
+    plugs:
+      - hardware-observe
+      - raw-input
+    command: usr/bin/libinput debug-events
+
+  debug-gui:
+    plugs:
+      - hardware-observe
+      - opengl
+      - raw-input
+      - wayland
+    command-chain:
+      - bin/graphics-core22-wrapper
+      - bin/wayland-launch
+    command: usr/bin/libinput debug-gui
+
+  measure:
+    plugs:
+      - hardware-observe
+      - raw-input
+    command: usr/bin/libinput measure
+
+  analyze:
+    plugs:
+      - hardware-observe
+      - raw-input
+    command: usr/bin/libinput analyze
+
+  record:
+    plugs:
+      - hardware-observe
+      - raw-input
+    command: usr/bin/libinput record
+
+  replay:
+    plugs:
+      - hardware-observe
+      - raw-input
+    command: usr/bin/libinput replay
+
+parts:
+  scripts:
+    plugin: dump
+    source: scripts
+    stage-packages:
+      - inotify-tools
+
+  libinput-tools:
+    plugin: nil
+    stage-packages:
+      - libinput-tools
+
+  gtkstuff:
+    plugin: nil
+    build-packages:
+      - libgdk-pixbuf2.0-0
+      - librsvg2-common
+      - shared-mime-info
+    override-build: |
+      # Update mime database
+      update-mime-database ${SNAPCRAFT_PART_INSTALL}/usr/share/mime
+    stage-packages:
+      - librsvg2-common
+      - gsettings-desktop-schemas
+      - libglib2.0-bin
+    override-prime: |
+      snapcraftctl prime
+      # Compile the gsettings schemas
+      /usr/lib/${SNAPCRAFT_ARCH_TRIPLET}/glib-2.0/glib-compile-schemas "$SNAPCRAFT_PRIME/usr/share/glib-2.0/schemas"
+      # Index the pixbuf loaders
+      LOADERS_PATH=$(echo ${SNAPCRAFT_PRIME}/usr/lib/${SNAPCRAFT_ARCH_TRIPLET}/gdk-pixbuf-2.0/*/loaders)
+      QUERY_LOADERS=/usr/lib/${SNAPCRAFT_ARCH_TRIPLET}/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders
+      GDK_PIXBUF_MODULEDIR=${LOADERS_PATH} ${QUERY_LOADERS} > ${LOADERS_PATH}/../loaders.cache
+      sed s!$SNAPCRAFT_PRIME!!g --in-place ${LOADERS_PATH}/../loaders.cache
+
+  graphics-core22:
+    after:
+      - scripts
+      - libinput-tools
+      - gtkstuff
+    source: https://github.com/MirServer/graphics-core22.git
+    plugin: dump
+    override-prime: |
+      craftctl default
+      ${CRAFT_PART_SRC}/bin/graphics-core22-cleanup mesa-core22
+      rm -rf ${CRAFT_PRIME}/usr/share/{doc,man}
+    prime:
+      - bin/graphics-core22-wrapper

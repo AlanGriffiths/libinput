@@ -31,6 +31,12 @@ license: Apache-2.0
 grade: stable
 confinement: strict
 
+architectures:
+  - build-on: amd64
+  - build-on: armhf
+  - build-on: arm64
+  - build-on: ppc64el
+
 layout:
   /usr/share/drirc.d:
     bind: $SNAP/graphics/drirc.d

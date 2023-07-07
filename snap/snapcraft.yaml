@@ -62,19 +62,16 @@ plugs:
 apps:
   list-devices:
     plugs:
-      - hardware-observe
       - raw-input
     command: usr/bin/libinput list-devices
 
   debug-events:
     plugs:
-      - hardware-observe
       - raw-input
     command: usr/bin/libinput debug-events
 
   debug-gui:
     plugs:
-      - hardware-observe
       - opengl
       - raw-input
       - wayland
@@ -85,25 +82,21 @@ apps:
 
   measure:
     plugs:
-      - hardware-observe
       - raw-input
     command: usr/bin/libinput measure
 
   analyze:
     plugs:
-      - hardware-observe
       - raw-input
     command: usr/bin/libinput analyze
 
   record:
     plugs:
-      - hardware-observe
       - raw-input
     command: usr/bin/libinput record
 
   replay:
     plugs:
-      - hardware-observe
       - raw-input
     command: usr/bin/libinput replay
 

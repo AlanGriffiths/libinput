@@ -33,7 +33,8 @@ fn main() {
         pointer_height: 0f64,
     };
 
-    println!("Starting the calibrate-touchscreen app, press <ESC> to quit.");
+    println!("Starting the calibrate-touchscreen app: touch the target spots.");
+    println!("(Or press <ESC> to quit!)");
 
     while state.running {
         event_queue.blocking_dispatch(&mut state).unwrap();

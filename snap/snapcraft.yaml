@@ -100,6 +100,14 @@ apps:
       - raw-input
     command: usr/bin/libinput replay
 
+  calibrate-touchscreen:
+    plugs:
+      - wayland
+    command-chain:
+      - bin/graphics-core22-wrapper
+      - bin/wayland-launch
+    command: bin/calibrate-touchscreen
+
 parts:
   scripts:
     plugin: dump
@@ -111,6 +119,10 @@ parts:
     plugin: nil
     stage-packages:
       - libinput-tools
+
+  calibrate-touchscreen:
+    plugin: rust
+    source: calibrate-touchscreen
 
   gtkstuff:
     plugin: nil
@@ -140,6 +152,7 @@ parts:
       - scripts
       - libinput-tools
       - gtkstuff
+      - calibrate-touchscreen
     source: https://github.com/MirServer/graphics-core22.git
     plugin: dump
     override-prime: |

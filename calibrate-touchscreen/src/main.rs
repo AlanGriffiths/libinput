@@ -1,6 +1,7 @@
 use std::{fs::File, os::unix::prelude::AsFd};
 use std::cmp::max;
 use std::collections::{HashMap};
+use std::error::Error;
 
 use wayland_client::{delegate_noop, protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool,
@@ -9,8 +10,8 @@ use wayland_client::{delegate_noop, protocol::{
 
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
-fn main() {
-    let conn = Connection::connect_to_env().unwrap();
+fn main() -> Result<(), Box<dyn Error>> {
+    let conn = Connection::connect_to_env()?;
 
     let mut event_queue = conn.new_event_queue();
     let qhandle = event_queue.handle();
@@ -37,15 +38,16 @@ fn main() {
     println!("(Or press <ESC> to quit!)");
 
     while state.running {
-        event_queue.blocking_dispatch(&mut state).unwrap();
+        event_queue.blocking_dispatch(&mut state)?;
     }
+
+    Ok(())
 }
 
 struct FullscreenSurface {
     width: i32,
     height: i32,
     wl_surface: Option<wl_surface::WlSurface>,
-    buffer: Option<wl_buffer::WlBuffer>,
     xdg_surface: Option<(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel)>,
 }
 
@@ -80,7 +82,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
         qh: &QueueHandle<Self>,
     ) {
         match event {
-            wl_registry::Event::Global { name, interface, version } => {
+            wl_registry::Event::Global { name, interface, version: _ } => {
                  match &interface[..] {
                     "wl_output" => {
                         let output = registry.bind::<wl_output::WlOutput, _, _>(name, 1, qh, ());
@@ -122,14 +124,13 @@ impl Dispatch<wl_output::WlOutput, ()> for State {
         use wayland_client::protocol::wl_output::Mode;
 
         match event {
-            wl_output::Event::Mode { flags: WEnum::Value(flags), width, height, refresh } => {
+            wl_output::Event::Mode { flags: WEnum::Value(flags), width, height, refresh: _ } => {
                 if flags.contains(Mode::Current) {
                     state.outputs.entry(output.clone())
                         .and_modify(|fullscreen| *fullscreen = Some(FullscreenSurface{
                             width: width,
                             height: height,
                             wl_surface: None,
-                            buffer: None,
                             xdg_surface: None,
                     }));
 
@@ -179,13 +180,13 @@ impl State {
         let wm_base = self.wm_base.as_ref().unwrap();
         let wl_shm = self.wl_shm.as_ref().unwrap();
 
-        for output in self.outputs.iter_mut() {
+        for (output, maybe_window) in self.outputs.iter_mut() {
 
-            if output.1.is_none() {
+            if maybe_window.is_none() {
                 return;
             }
 
-            let window = output.1.as_mut().unwrap();
+            let window = maybe_window.as_mut().unwrap();
 
             if window.wl_surface.is_none() {
                 let surface = compositor.create_surface(qh, ());
@@ -197,11 +198,8 @@ impl State {
                 let xdg_surface = wm_base.get_xdg_surface(wl_surface, qh, ());
                 let toplevel = xdg_surface.get_toplevel(qh, ());
 
-                // let output = &unsafe { *window.output };
-                toplevel.set_title(output.0.id().to_string());
-
-                toplevel.set_fullscreen(Some(output.0));
-
+                toplevel.set_title(output.id().to_string());
+                toplevel.set_fullscreen(Some(output));
                 wl_surface.commit();
 
                 window.xdg_surface = Some((xdg_surface, toplevel));
@@ -225,9 +223,9 @@ impl State {
                 (),
             );
 
-            window.buffer = Some(buffer.clone());
             wl_surface.attach(Some(&buffer), 0, 0);
             wl_surface.commit();
+            buffer.destroy();
         }
     }
 
@@ -268,7 +266,7 @@ impl State {
                 self.touches[1].1*(self.touches[0].0*TARGETS[2].1 - self.touches[2].0*TARGETS[0].1) +
                 self.touches[2].1*(self.touches[1].0*TARGETS[0].1 - self.touches[0].0*TARGETS[1].1);
 
-            println!("Calibration = {:.3}, {:.3}, {:.3}, {:.3}, {:.3}, {:.3}", ak/k, bk/k, ck/k, dk/k, ek/k, fk/k);
+            println!("Calibration = {:.3} {:.3} {:.3} {:.3} {:.3} {:.3}", ak/k, bk/k, ck/k, dk/k, ek/k, fk/k);
 
             self.running = false;
         }
@@ -362,11 +360,12 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_keyboard::Event::Key { key, .. } = event {
-            if key == 1 {
+        match event {
+            wl_keyboard::Event::Key { key: 1, .. } => {
                 // ESC key
                 state.running = false;
             }
+            _ => {}
         }
     }
 }
@@ -400,7 +399,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         qh: &QueueHandle<Self>,
     ) {
         match event {
-            wl_pointer::Event::Button { serial: _, time: _, button, state: WEnum::Value(bstate) } => {
+            wl_pointer::Event::Button { serial: _, time: _, button: _, state: WEnum::Value(bstate) } => {
 
                 if bstate == wl_pointer::ButtonState::Pressed {
                     state.process_touch(state.pointer_x/state.pointer_width, state.pointer_y/state.pointer_height, qh);

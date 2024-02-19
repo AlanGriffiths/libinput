@@ -7,8 +7,13 @@ use wayland_client::{delegate_noop, protocol::{
     wl_buffer, wl_compositor, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool,
     wl_surface, wl_output, wl_touch, wl_pointer
 }, Connection, Dispatch, QueueHandle, WEnum, Proxy};
+use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_output::WlOutput;
+use wayland_client::protocol::wl_shm::WlShm;
+use wayland_client::protocol::wl_surface::WlSurface;
 
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
+use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let conn = Connection::connect_to_env()?;
@@ -24,7 +29,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         compositor: None,
         wm_base: None,
         wl_shm: None,
-        xdg_surface: None,
         outputs: HashMap::new(),
         targets_index: 0,
         touches: [(0f64, 0f64), (0f64, 0f64), (0f64, 0f64)],
@@ -47,8 +51,31 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct FullscreenSurface {
     width: i32,
     height: i32,
-    wl_surface: Option<wl_surface::WlSurface>,
-    xdg_surface: Option<(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel)>,
+    wl_surface: wl_surface::WlSurface,
+}
+
+impl FullscreenSurface {
+    fn attach_buffer(&self, wl_shm: &WlShm, qh: &QueueHandle<State>, targets_index: usize) {
+        let width = self.width as u32;
+        let height = self.height as u32;
+
+        let mut file = tempfile::tempfile().unwrap();
+        draw_target(&mut file, (width, height), TARGETS[targets_index]);
+        let pool = wl_shm.create_pool(file.as_fd(), (width * height * 4) as i32, qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            (width * 4) as i32,
+            wl_shm::Format::Argb8888,
+            qh,
+            (),
+        );
+
+        self.wl_surface.attach(Some(&buffer), 0, 0);
+        self.wl_surface.commit();
+        buffer.destroy();
+    }
 }
 
 // We need targets at three points (not on a line)
@@ -58,7 +85,6 @@ struct State {
     running: bool,
     compositor: Option<wl_compositor::WlCompositor>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
-    xdg_surface: Option<(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel)>,
     wl_shm: Option<wl_shm::WlShm>,
     outputs:HashMap<wl_output::WlOutput, Option<FullscreenSurface>>,
 
@@ -126,15 +152,16 @@ impl Dispatch<wl_output::WlOutput, ()> for State {
         match event {
             wl_output::Event::Mode { flags: WEnum::Value(flags), width, height, refresh: _ } => {
                 if flags.contains(Mode::Current) {
-                    state.outputs.entry(output.clone())
-                        .and_modify(|fullscreen| *fullscreen = Some(FullscreenSurface{
-                            width: width,
-                            height: height,
-                            wl_surface: None,
-                            xdg_surface: None,
-                    }));
+                    let surface = FullscreenSurface {
+                        width: width,
+                        height: height,
+                        wl_surface: init_surface(qh, state.compositor.as_ref().unwrap(), state.wm_base.as_ref().unwrap(), output),
+                    };
 
-                    state.draw_fullscreen_surfaces(qh);
+                    surface.attach_buffer(state.wl_shm.as_ref().unwrap(), qh, state.targets_index);
+
+                    state.outputs.entry(output.clone())
+                        .and_modify(|fullscreen| { *fullscreen = Some(surface) });
                 }
             }
 
@@ -172,15 +199,13 @@ fn draw_target(tmp: &mut File, (buf_x, buf_y): (u32, u32), (target_x, target_y):
 impl State {
     fn draw_fullscreen_surfaces(&mut self, qh: &QueueHandle<State>) {
 
-        if self.compositor.is_none() || self.wm_base.is_none() || self.wl_shm.is_none() {
+        if self.wl_shm.is_none() {
             return;
         }
 
-        let compositor = self.compositor.as_ref().unwrap();
-        let wm_base = self.wm_base.as_ref().unwrap();
         let wl_shm = self.wl_shm.as_ref().unwrap();
 
-        for (output, maybe_window) in self.outputs.iter_mut() {
+        for (_, maybe_window) in self.outputs.iter_mut() {
 
             if maybe_window.is_none() {
                 return;
@@ -188,44 +213,8 @@ impl State {
 
             let window = maybe_window.as_mut().unwrap();
 
-            if window.wl_surface.is_none() {
-                let surface = compositor.create_surface(qh, ());
-                window.wl_surface = Some(surface);
-            }
-
-            if window.xdg_surface.is_none() {
-                let wl_surface = window.wl_surface.as_ref().unwrap();
-                let xdg_surface = wm_base.get_xdg_surface(wl_surface, qh, ());
-                let toplevel = xdg_surface.get_toplevel(qh, ());
-
-                toplevel.set_title(output.id().to_string());
-                toplevel.set_fullscreen(Some(output));
-                wl_surface.commit();
-
-                window.xdg_surface = Some((xdg_surface, toplevel));
-            }
-
-            let wl_surface = window.wl_surface.as_ref().unwrap();
-
-            let mut file = tempfile::tempfile().unwrap();
-            let width = window.width as u32;
-            let height = window.height as u32;
-
-            draw_target(&mut file, (width, height), TARGETS[self.targets_index]);
-            let pool = wl_shm.create_pool(file.as_fd(), (width * height * 4) as i32, qh, ());
-            let buffer = pool.create_buffer(
-                0,
-                width as i32,
-                height as i32,
-                (width * 4) as i32,
-                wl_shm::Format::Argb8888,
-                qh,
-                (),
-            );
-
-            wl_surface.attach(Some(&buffer), 0, 0);
-            wl_surface.commit();
-            buffer.destroy();
+            let targets_index = self.targets_index;
+            window.attach_buffer(wl_shm, qh, targets_index);
         }
     }
 
@@ -275,12 +264,24 @@ impl State {
     fn size_of(&self, surface: &wl_surface::WlSurface) -> (f64, f64) {
         for (_,fs) in &self.outputs {
             let ss = fs.as_ref().unwrap();
-            if ss.wl_surface.as_ref().unwrap() == surface {
+            if &ss.wl_surface == surface {
                 return (ss.width as f64, ss.height as f64);
             };
         }
         unreachable!("The loop should always return");
     }
+}
+
+fn init_surface(qh: &QueueHandle<State>, compositor: &WlCompositor, wm_base: &XdgWmBase, output: &WlOutput) -> WlSurface {
+    let surface = compositor.create_surface(qh, ());
+
+    let xdg_surface = wm_base.get_xdg_surface(&surface, qh, ());
+    let toplevel = xdg_surface.get_toplevel(qh, ());
+
+    toplevel.set_title(output.id().to_string());
+    toplevel.set_fullscreen(Some(output));
+    surface.commit();
+    surface
 }
 
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {

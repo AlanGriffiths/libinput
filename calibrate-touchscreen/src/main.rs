@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct FullscreenSurface {
     width: i32,
     height: i32,
-    wl_surface: wl_surface::WlSurface,
+    wl_surface: WlSurface,
 }
 
 impl FullscreenSurface {
@@ -83,10 +83,10 @@ static TARGETS: [(f64, f64); 3] = [(0.2f64, 0.4f64), (0.8f64, 0.6f64), (0.4f64, 
 
 struct State {
     running: bool,
-    compositor: Option<wl_compositor::WlCompositor>,
-    wm_base: Option<xdg_wm_base::XdgWmBase>,
-    wl_shm: Option<wl_shm::WlShm>,
-    outputs:HashMap<wl_output::WlOutput, Option<FullscreenSurface>>,
+    compositor: Option<WlCompositor>,
+    wm_base: Option<XdgWmBase>,
+    wl_shm: Option<WlShm>,
+    outputs:HashMap<WlOutput, Option<FullscreenSurface>>,
 
     targets_index: usize,
     touches: [(f64, f64); 3],
@@ -111,23 +111,23 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
             wl_registry::Event::Global { name, interface, version: _ } => {
                  match &interface[..] {
                     "wl_output" => {
-                        let output = registry.bind::<wl_output::WlOutput, _, _>(name, 1, qh, ());
+                        let output = registry.bind::<WlOutput, _, _>(name, 1, qh, ());
                         state.outputs.insert(output, None);
                     }
                     "wl_compositor" => {
                         let compositor =
-                            registry.bind::<wl_compositor::WlCompositor, _, _>(name, 1, qh, ());
+                            registry.bind::<WlCompositor, _, _>(name, 1, qh, ());
                         state.compositor = Some(compositor);
                     }
                     "wl_shm" => {
-                        let shm = registry.bind::<wl_shm::WlShm, _, _>(name, 1, qh, ());
+                        let shm = registry.bind::<WlShm, _, _>(name, 1, qh, ());
                         state.wl_shm = Some(shm);
                     }
                     "wl_seat" => {
                         registry.bind::<wl_seat::WlSeat, _, _>(name, 1, qh, ());
                     }
                     "xdg_wm_base" => {
-                        let wm_base = registry.bind::<xdg_wm_base::XdgWmBase, _, _>(name, 1, qh, ());
+                        let wm_base = registry.bind::<XdgWmBase, _, _>(name, 1, qh, ());
                         state.wm_base = Some(wm_base);
                     }
                     _ => {}
@@ -138,10 +138,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
     }
 }
 
-impl Dispatch<wl_output::WlOutput, ()> for State {
+impl Dispatch<WlOutput, ()> for State {
     fn event(
         state: &mut Self,
-        output: &wl_output::WlOutput,
+        output: &WlOutput,
         event: wl_output::Event,
         _: &(),
         _: &Connection,
@@ -261,7 +261,7 @@ impl State {
         }
     }
 
-    fn size_of(&self, surface: &wl_surface::WlSurface) -> (f64, f64) {
+    fn size_of(&self, surface: &WlSurface) -> (f64, f64) {
         for (_,fs) in &self.outputs {
             let ss = fs.as_ref().unwrap();
             if &ss.wl_surface == surface {
@@ -284,10 +284,10 @@ fn init_surface(qh: &QueueHandle<State>, compositor: &WlCompositor, wm_base: &Xd
     surface
 }
 
-impl Dispatch<xdg_wm_base::XdgWmBase, ()> for State {
+impl Dispatch<XdgWmBase, ()> for State {
     fn event(
         _: &mut Self,
-        wm_base: &xdg_wm_base::XdgWmBase,
+        wm_base: &XdgWmBase,
         event: xdg_wm_base::Event,
         _: &(),
         _: &Connection,
@@ -422,8 +422,8 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
 }
 
 // Ignore events from these object types in this example.
-delegate_noop!(State: ignore wl_compositor::WlCompositor);
-delegate_noop!(State: ignore wl_surface::WlSurface);
-delegate_noop!(State: ignore wl_shm::WlShm);
+delegate_noop!(State: ignore WlCompositor);
+delegate_noop!(State: ignore WlSurface);
+delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);

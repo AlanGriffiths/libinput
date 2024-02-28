@@ -29,9 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         compositor: None,
         wm_base: None,
         wl_shm: None,
-        outputs: HashMap::new(),
-        targets_index: 0,
-        touches: [(0f64, 0f64), (0f64, 0f64), (0f64, 0f64)],
+        initialised: None,
         pointer_x: 0f64,
         pointer_y: 0f64,
         pointer_width: 0f64,
@@ -41,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Starting the calibrate-touchscreen app: touch the target spots.");
     println!("(Or press <ESC> to quit!)");
 
-    while state.running {
+    while state.not_done() {
         event_queue.blocking_dispatch(&mut state)?;
     }
 
@@ -56,21 +54,13 @@ struct FullscreenSurface {
 
 impl FullscreenSurface {
     fn attach_buffer(&self, wl_shm: &WlShm, qh: &QueueHandle<State>, targets_index: usize) {
-        let width = self.width as u32;
-        let height = self.height as u32;
+        let width = self.width;
+        let height = self.height;
 
         let mut file = tempfile::tempfile().unwrap();
         draw_with_target(&mut file, (width, height), TARGETS[targets_index]);
-        let pool = wl_shm.create_pool(file.as_fd(), (width * height * 4) as i32, qh, ());
-        let buffer = pool.create_buffer(
-            0,
-            width as i32,
-            height as i32,
-            (width * 4) as i32,
-            wl_shm::Format::Argb8888,
-            qh,
-            (),
-        );
+        let pool = wl_shm.create_pool(file.as_fd(), width * height * 4, qh, ());
+        let buffer = pool.create_buffer(0, width, height, width * 4, wl_shm::Format::Argb8888, qh, ());
 
         self.wl_surface.attach(Some(&buffer), 0, 0);
         self.wl_surface.commit();
@@ -83,13 +73,10 @@ static TARGETS: [(f64, f64); 3] = [(0.2f64, 0.4f64), (0.8f64, 0.6f64), (0.4f64, 
 
 struct State {
     running: bool,
+    initialised: Option<InitialisedState>,
     compositor: Option<WlCompositor>,
     wm_base: Option<XdgWmBase>,
     wl_shm: Option<WlShm>,
-    outputs:HashMap<WlOutput, Option<FullscreenSurface>>,
-
-    targets_index: usize,
-    touches: [(f64, f64); 3],
 
     // We shouldn't calibrate using the mouse, but this makes testing easier
     pointer_x: f64,
@@ -111,8 +98,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
             wl_registry::Event::Global { name, interface, version: _ } => {
                  match &interface[..] {
                     "wl_output" => {
-                        let output = registry.bind::<WlOutput, _, _>(name, 1, qh, ());
-                        state.outputs.insert(output, None);
+                        registry.bind::<WlOutput, _, _>(name, 1, qh, ());
                     }
                     "wl_compositor" => {
                         let compositor =
@@ -152,16 +138,27 @@ impl Dispatch<WlOutput, ()> for State {
         match event {
             wl_output::Event::Mode { flags: WEnum::Value(flags), width, height, refresh: _ } => {
                 if flags.contains(Mode::Current) {
-                    let surface = FullscreenSurface {
-                        width: width,
-                        height: height,
-                        wl_surface: init_surface(qh, state.compositor.as_ref().unwrap(), state.wm_base.as_ref().unwrap(), output),
-                    };
 
-                    surface.attach_buffer(state.wl_shm.as_ref().unwrap(), qh, state.targets_index);
+                    if state.initialised.is_none()
+                    {
+                        let Some(compositor) = state.compositor.take()
+                            else { unreachable!("Missing compositor global"); };
+                        let Some(wm_base) = state.wm_base.take()
+                            else { unreachable!("Missing wm_base global"); };
+                        let Some(wl_shm) = state.wl_shm.take()
+                            else { unreachable!("Missing wl_shm global"); };
 
-                    state.outputs.entry(output.clone())
-                        .and_modify(|fullscreen| { *fullscreen = Some(surface) });
+                        state.initialised = Some(InitialisedState{
+                            compositor: compositor,
+                            wm_base: wm_base,
+                            wl_shm: wl_shm,
+                            outputs: HashMap::new(),
+                            targets_index: 0,
+                            touches: [(0f64, 0f64), (0f64, 0f64), (0f64, 0f64)],
+                        });
+                    }
+
+                    state.init_output(output, qh, width, height);
                 }
             }
 
@@ -170,7 +167,7 @@ impl Dispatch<WlOutput, ()> for State {
     }
 }
 
-fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (u32, u32), (target_x, target_y): (f64, f64)) {
+fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (i32, i32), (target_x, target_y): (f64, f64)) {
     let centre_x = (buf_x as f64 * target_x) as i64;
     let centre_y = (buf_y as f64 * target_y) as i64;
     let target_size = (max(buf_x, buf_y)/80) as i64;
@@ -182,8 +179,8 @@ fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (u32, u32), (target_x, targe
             if distance_squared >= target_size*target_size {
                 let a = 0xFF;
                 let r = 0x3F;
-                let g = 0x3F*y as u32/buf_y;
-                let b = 0x3F*y as u32/buf_y;
+                let g = 0x3F*y as i32/buf_y;
+                let b = 0x3F*y as i32/buf_y;
                 buf.write_all(&[b as u8, g as u8, r as u8, a as u8]).unwrap();
             }
             else {
@@ -197,24 +194,52 @@ fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (u32, u32), (target_x, targe
 }
 
 impl State {
+    fn process_touch(&mut self, touch_x: f64, touch_y:f64, qh: &QueueHandle<State>) {
+        self.initialised.as_mut().unwrap().process_touch(touch_x, touch_y, qh);
+    }
+
+    fn size_of(&mut self, surface: &WlSurface) -> (f64, f64) {
+        self.initialised.as_mut().unwrap().size_of(&surface)
+    }
+
+    fn not_done(&mut self) -> bool {
+        self.running && (self.initialised.is_none() || !self.initialised.as_ref().unwrap().is_done())
+    }
+
+    fn init_output(&mut self, output: &WlOutput, qh: &QueueHandle<State>, width: i32, height: i32) {
+        self.initialised.as_mut().unwrap().init_output(output, width, height, qh);
+    }
+}
+
+struct InitialisedState {
+    compositor: WlCompositor,
+    wm_base: XdgWmBase,
+    wl_shm: WlShm,
+    outputs:HashMap<WlOutput, FullscreenSurface>,
+
+    targets_index: usize,
+    touches: [(f64, f64); 3],
+}
+
+impl InitialisedState {
+    fn init_output(&mut self, output: &WlOutput, width: i32, height: i32, qh: &QueueHandle<State>) {
+        let surface = FullscreenSurface {
+            width: width,
+            height: height,
+            wl_surface: init_surface(qh, &self.compositor, &self.wm_base, &output),
+        };
+
+        surface.attach_buffer(&self.wl_shm, qh, self.targets_index);
+
+        self.outputs.insert(output.clone(), surface);
+    }
+
     fn draw_fullscreen_surfaces(&mut self, qh: &QueueHandle<State>) {
 
-        if self.wl_shm.is_none() {
-            return;
-        }
-
-        let wl_shm = self.wl_shm.as_ref().unwrap();
-
-        for (_, maybe_window) in self.outputs.iter_mut() {
-
-            if maybe_window.is_none() {
-                return;
-            }
-
-            let window = maybe_window.as_mut().unwrap();
+        for (_, window) in self.outputs.iter_mut() {
 
             let targets_index = self.targets_index;
-            window.attach_buffer(wl_shm, qh, targets_index);
+            window.attach_buffer(&self.wl_shm, qh, targets_index);
         }
     }
 
@@ -224,51 +249,52 @@ impl State {
         if self.targets_index != TARGETS.len() {
             self.draw_fullscreen_surfaces(qh);
         } else {
-            // Oh for a convenient linear algebra package!
+            // This is a well known solution to this linear algebra problem
             let k =
                 (self.touches[0].0-self.touches[2].0)*(self.touches[1].1-self.touches[2].1) -
-                (self.touches[1].0-self.touches[2].0)*(self.touches[0].1-self.touches[2].1);
+                    (self.touches[1].0-self.touches[2].0)*(self.touches[0].1-self.touches[2].1);
 
             let ak =
                 (TARGETS[0].0-TARGETS[2].0)*(self.touches[1].1-self.touches[2].1) -
-                (TARGETS[1].0-TARGETS[2].0)*(self.touches[0].1-self.touches[2].1);
+                    (TARGETS[1].0-TARGETS[2].0)*(self.touches[0].1-self.touches[2].1);
 
             let bk =
                 (self.touches[0].0-self.touches[2].0)*(TARGETS[1].0-TARGETS[2].0) -
-                (TARGETS[0].0-TARGETS[2].0)*(self.touches[1].0-self.touches[2].0);
+                    (TARGETS[0].0-TARGETS[2].0)*(self.touches[1].0-self.touches[2].0);
 
             let ck =
                 self.touches[0].1*(self.touches[2].0*TARGETS[1].0 - self.touches[1].0*TARGETS[2].0) +
-                self.touches[1].1*(self.touches[0].0*TARGETS[2].0 - self.touches[2].0*TARGETS[0].0) +
-                self.touches[2].1*(self.touches[1].0*TARGETS[0].0 - self.touches[0].0*TARGETS[1].0);
+                    self.touches[1].1*(self.touches[0].0*TARGETS[2].0 - self.touches[2].0*TARGETS[0].0) +
+                    self.touches[2].1*(self.touches[1].0*TARGETS[0].0 - self.touches[0].0*TARGETS[1].0);
 
             let dk =
                 (TARGETS[0].1-TARGETS[2].1)*(self.touches[1].1-self.touches[2].1) -
-                (TARGETS[1].1-TARGETS[2].1)*(self.touches[0].1-self.touches[2].1);
+                    (TARGETS[1].1-TARGETS[2].1)*(self.touches[0].1-self.touches[2].1);
 
             let ek =
                 (self.touches[0].0-self.touches[2].0)*(TARGETS[1].1-TARGETS[2].1) -
-                (TARGETS[0].1-TARGETS[2].1)*(self.touches[1].0-self.touches[2].0);
+                    (TARGETS[0].1-TARGETS[2].1)*(self.touches[1].0-self.touches[2].0);
 
             let fk =
                 self.touches[0].1*(self.touches[2].0*TARGETS[1].1 - self.touches[1].0*TARGETS[2].1) +
-                self.touches[1].1*(self.touches[0].0*TARGETS[2].1 - self.touches[2].0*TARGETS[0].1) +
-                self.touches[2].1*(self.touches[1].0*TARGETS[0].1 - self.touches[0].0*TARGETS[1].1);
+                    self.touches[1].1*(self.touches[0].0*TARGETS[2].1 - self.touches[2].0*TARGETS[0].1) +
+                    self.touches[2].1*(self.touches[1].0*TARGETS[0].1 - self.touches[0].0*TARGETS[1].1);
 
             println!("Calibration = {:.3} {:.3} {:.3} {:.3} {:.3} {:.3}", ak/k, bk/k, ck/k, dk/k, ek/k, fk/k);
-
-            self.running = false;
         }
     }
 
     fn size_of(&self, surface: &WlSurface) -> (f64, f64) {
         for (_,fs) in &self.outputs {
-            let ss = fs.as_ref().unwrap();
-            if &ss.wl_surface == surface {
-                return (ss.width as f64, ss.height as f64);
+            if &fs.wl_surface == surface {
+                return (fs.width as f64, fs.height as f64);
             };
         }
         unreachable!("The loop should always return");
+    }
+
+    fn is_done(&self) -> bool {
+        self.targets_index == TARGETS.len()
     }
 }
 
@@ -296,18 +322,6 @@ impl Dispatch<XdgWmBase, ()> for State {
         if let xdg_wm_base::Event::Ping { serial } = event {
             wm_base.pong(serial);
         }
-    }
-}
-
-impl Dispatch<xdg_surface::XdgSurface, ()> for State {
-    fn event(
-        _: &mut Self,
-        _: &xdg_surface::XdgSurface,
-        _: xdg_surface::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
     }
 }
 
@@ -427,3 +441,4 @@ delegate_noop!(State: ignore WlSurface);
 delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
+delegate_noop!(State: ignore xdg_surface::XdgSurface);

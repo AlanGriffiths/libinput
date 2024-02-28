@@ -4,8 +4,8 @@ use std::collections::{HashMap};
 use std::error::Error;
 
 use wayland_client::{delegate_noop, protocol::{
-    wl_buffer, wl_compositor, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-    wl_surface, wl_output, wl_touch, wl_pointer
+    wl_buffer, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_output,
+    wl_touch, wl_pointer
 }, Connection, Dispatch, QueueHandle, WEnum, Proxy};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_output::WlOutput;
@@ -60,7 +60,7 @@ impl FullscreenSurface {
         let height = self.height as u32;
 
         let mut file = tempfile::tempfile().unwrap();
-        draw_target(&mut file, (width, height), TARGETS[targets_index]);
+        draw_with_target(&mut file, (width, height), TARGETS[targets_index]);
         let pool = wl_shm.create_pool(file.as_fd(), (width * height * 4) as i32, qh, ());
         let buffer = pool.create_buffer(
             0,
@@ -170,7 +170,7 @@ impl Dispatch<WlOutput, ()> for State {
     }
 }
 
-fn draw_target(tmp: &mut File, (buf_x, buf_y): (u32, u32), (target_x, target_y): (f64, f64)) {
+fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (u32, u32), (target_x, target_y): (f64, f64)) {
     let centre_x = (buf_x as f64 * target_x) as i64;
     let centre_y = (buf_y as f64 * target_y) as i64;
     let target_size = (max(buf_x, buf_y)/80) as i64;

@@ -1,6 +1,7 @@
 name: libinput
-version: "22.04"
-base: core22
+version: "24.04"
+base: core24
+build-base: devel
 summary: libinput-tools helpful in debugging libinput
 description: |
   - list-devices:
@@ -28,7 +29,7 @@ website: https://github.com/AlanGriffiths/libinput
 contact: https://github.com/AlanGriffiths/libinput/issues
 license: Apache-2.0
 
-grade: stable
+grade: devel
 confinement: strict
 
 architectures:
@@ -54,16 +55,21 @@ layout:
     symlink: $SNAP/usr/share/libinput
 
 plugs:
-  graphics-core22:
+  graphics-core24:
     interface: content
     target: $SNAP/graphics
-    default-provider: mesa-core22
+#    default-provider: mesa-core24
 
 apps:
   list-devices:
     plugs:
       - raw-input
     command: usr/bin/libinput list-devices
+
+  list-kernel-devices:
+    plugs:
+      - raw-input
+    command: usr/bin/libinput list-kernel-devices
 
   debug-events:
     plugs:
@@ -76,7 +82,7 @@ apps:
       - raw-input
       - wayland
     command-chain:
-      - bin/graphics-core22-wrapper
+      - bin/graphics-core24-wrapper
       - bin/wayland-launch
     command: usr/bin/libinput debug-gui
 
@@ -135,16 +141,16 @@ parts:
       GDK_PIXBUF_MODULEDIR=${LOADERS_PATH} ${QUERY_LOADERS} > ${LOADERS_PATH}/../loaders.cache
       sed s!$SNAPCRAFT_PRIME!!g --in-place ${LOADERS_PATH}/../loaders.cache
 
-  graphics-core22:
+  graphics-core24:
     after:
       - scripts
       - libinput-tools
       - gtkstuff
-    source: https://github.com/MirServer/graphics-core22.git
+    source: https://github.com/canonical/graphics-core24.git
     plugin: dump
     override-prime: |
       craftctl default
-      ${CRAFT_PART_SRC}/bin/graphics-core22-cleanup mesa-core22
+      ${CRAFT_PART_SRC}/bin/graphics-core24-cleanup mesa-core24
       rm -rf ${CRAFT_PRIME}/usr/share/{doc,man}
     prime:
-      - bin/graphics-core22-wrapper
+      - bin/graphics-core24-wrapper

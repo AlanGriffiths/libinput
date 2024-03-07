@@ -24,6 +24,10 @@ description: |
   - replay:
   Replay a previously recorded event stream. See the man page for more info
 
+  - calibrate-touchscreen:
+  Bonus utility to help with touchscreen calibration.
+  https://mir-server.io/docs/howto-calibrate-a-touchscreen-device
+
 website: https://github.com/AlanGriffiths/libinput
 contact: https://github.com/AlanGriffiths/libinput/issues
 license: Apache-2.0

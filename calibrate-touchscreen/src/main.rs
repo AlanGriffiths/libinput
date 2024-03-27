@@ -16,6 +16,7 @@ use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
 };
 
+use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface;
 use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
@@ -256,8 +257,6 @@ impl InitialisedState {
             height: height,
             wl_surface: init_surface(qh, &self.compositor, &self.wm_base, &output),
         };
-
-        surface.attach_buffer(&self.wl_shm, qh, self.targets_index);
 
         self.outputs.insert(output.clone(), surface);
     }
@@ -500,10 +499,32 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
     }
 }
 
+impl Dispatch<xdg_surface::XdgSurface, ()> for State {
+    fn event(
+        state: &mut Self,
+        proxy: &XdgSurface,
+        event: xdg_surface::Event,
+        _data: &(),
+        _conn: &Connection,
+        qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            xdg_surface::Event::Configure { serial } => {
+                proxy.ack_configure(serial);
+                state
+                    .initialised
+                    .as_mut()
+                    .unwrap()
+                    .draw_fullscreen_surfaces(qhandle);
+            }
+            _ => {}
+        }
+    }
+}
+
 // Ignore events from these object types in this example.
 delegate_noop!(State: ignore WlCompositor);
 delegate_noop!(State: ignore WlSurface);
 delegate_noop!(State: ignore WlShm);
 delegate_noop!(State: ignore wl_shm_pool::WlShmPool);
 delegate_noop!(State: ignore wl_buffer::WlBuffer);
-delegate_noop!(State: ignore xdg_surface::XdgSurface);

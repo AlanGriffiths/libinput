@@ -76,6 +76,7 @@ impl FullscreenSurface {
         );
 
         self.wl_surface.attach(Some(&buffer), 0, 0);
+        self.wl_surface.damage(0, 0, width, height);
         self.wl_surface.commit();
         buffer.destroy();
     }

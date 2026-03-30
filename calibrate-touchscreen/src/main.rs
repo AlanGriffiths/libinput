@@ -62,7 +62,14 @@ impl FullscreenSurface {
         let width = self.width;
         let height = self.height;
 
-        let mut file = tempfile::tempfile().unwrap();
+        let mut file = match tempfile::tempfile() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Failed to create temporary buffer file: {}", e);
+                return;
+            }
+        };
+
         draw_with_target(&mut file, (width, height), TARGETS[targets_index]);
         let pool = wl_shm.create_pool(file.as_fd(), width * height * 4, qh, ());
         let buffer = pool.create_buffer(
@@ -79,6 +86,7 @@ impl FullscreenSurface {
         self.wl_surface.damage(0, 0, width, height);
         self.wl_surface.commit();
         buffer.destroy();
+        pool.destroy();
     }
 }
 
@@ -191,6 +199,7 @@ impl Dispatch<WlOutput, ()> for State {
 fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (i32, i32), (target_x, target_y): (f64, f64)) {
     let centre_x = (buf_x as f64 * target_x) as i64;
     let centre_y = (buf_y as f64 * target_y) as i64;
+    // Target circle size is 1/80th of the screen size for easy visibility and accurate touching
     let target_size = (max(buf_x, buf_y) / 80) as i64;
     use std::io::Write;
     let mut buf = std::io::BufWriter::new(tmp);
@@ -199,6 +208,8 @@ fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (i32, i32), (target_x, targe
             let distance_squared =
                 (x - centre_x) * (x - centre_x) + (y - centre_y) * (y - centre_y);
             if distance_squared >= target_size * target_size {
+                // Outside target circle: draw gradient background
+                // ARGB8888 format: [B, G, R, A]
                 let a = 0xFF;
                 let r = 0x3F;
                 let g = 0x3F * y as i32 / buf_y;
@@ -206,6 +217,7 @@ fn draw_with_target(tmp: &mut File, (buf_x, buf_y): (i32, i32), (target_x, targe
                 buf.write_all(&[b as u8, g as u8, r as u8, a as u8])
                     .unwrap();
             } else {
+                // Inside target circle: draw white circle with smooth edges
                 let intensity = 0xFF - 0x40 * (distance_squared / (target_size * target_size / 4));
                 let a = 0xFF;
                 buf.write_all(&[intensity as u8, intensity as u8, intensity as u8, a as u8])
@@ -279,6 +291,13 @@ impl InitialisedState {
             let k = (self.touches[0].0 - self.touches[2].0)
                 * (self.touches[1].1 - self.touches[2].1)
                 - (self.touches[1].0 - self.touches[2].0) * (self.touches[0].1 - self.touches[2].1);
+
+            // Check for collinear points (determinant close to zero)
+            if k.abs() < 1e-6 {
+                eprintln!("Error: touched points are collinear or too close together. Cannot calibrate.");
+                eprintln!("Please touch the three targets more accurately and ensure they form a triangle.");
+                return;
+            }
 
             let ak = (TARGETS[0].0 - TARGETS[2].0) * (self.touches[1].1 - self.touches[2].1)
                 - (TARGETS[1].0 - TARGETS[2].0) * (self.touches[0].1 - self.touches[2].1);
@@ -512,11 +531,9 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
         match event {
             xdg_surface::Event::Configure { serial } => {
                 proxy.ack_configure(serial);
-                state
-                    .initialised
-                    .as_mut()
-                    .unwrap()
-                    .draw_fullscreen_surfaces(qhandle);
+                if let Some(init) = state.initialised.as_mut() {
+                    init.draw_fullscreen_surfaces(qhandle);
+                }
             }
             _ => {}
         }
